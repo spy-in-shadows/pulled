@@ -20,4 +20,4 @@ technically impossible or wrong, stop and ask instead of improvising.
 
 - Follow the phase workflow in SPEC section 9; stop where it says STOP.
 - Conventional commit messages, one commit per phase (Phase 2: one commit per check).
-- Keep source well under ~1000 lines.
+- Aim for ~1,200 lines of source; readability before line count.

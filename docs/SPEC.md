@@ -23,7 +23,7 @@ Before writing any code, save this spec verbatim as docs/SPEC.md and add a short
 
 Import mode is skipped entirely when NODE_ENV === 'production', when CI is truthy, or when PULLED is '0' / 'false' / 'off'. The CLI ignores NODE_ENV and CI, so it works as a CI step or a `predev` script.
 
-Import mode runs the synchronous checks immediately and prints at most once per process. The async migrations check runs afterwards and prints its own small block only if it finds pending migrations. Its timers and sockets must be unref'd so the host process can still exit normally.
+Import mode runs the synchronous checks immediately and prints at most once per process. The async migrations check runs afterwards and prints its own small block only if it finds pending migrations. Its timers and sockets must be unref'd so the host process can still exit normally. A TCP connect that is still in flight holds the event loop regardless, so on timeout or error pulled destroys the socket itself: the host exits at most 1.5 s late, and only when the DB host doesn't answer at all (Phase 2 decision 1).
 
 # 3. Project root
 
@@ -75,10 +75,16 @@ Validate the config; ignore unknown keys and warn about them under PULLED_DEBUG 
 
 ## `migrations` — pending Prisma migrations (async)
 - Only runs if the migrations dir exists (prisma/migrations next to the schema, or a path found in prisma.config.*) and the datasource provider is postgresql. Other providers → skip with a reason.
-- Env var name, in this order: `url = env("X")` in the schema datasource (Prisma 6) → in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X` and use it only if exactly ONE distinct name is found → otherwise DATABASE_URL. Never execute the config.
-- Connection string: process.env[name], otherwise that name parsed from .env (don't mutate process.env). None found → skip.
+- Which database, in this order (Phase 2 decision 4):
+  - schema datasource `url = env("X")` (Prisma 6) → env var X;
+  - schema datasource `url = "postgresql://..."` (hard-coded) → connect with that literal URL;
+  - schema datasource `url` in any other form → skip (unclear);
+  - no `url` in the schema: in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X`; exactly ONE distinct name → env var X; several names, or a `url:` with no extractable name → skip (unclear);
+  - nothing names a source at all → env var DATABASE_URL.
+  Never fall back to DATABASE_URL when the schema or config names a different source. Never execute the config.
+- Connection string for env var X: process.env[X], otherwise X parsed from .env (don't mutate process.env). None found → skip. Never print the URL, not even under PULLED_DEBUG (print the host only).
 - Resolve `pg` from the project root with createRequire. Not installed → skip with reason "install pg to enable".
-- Query `SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`, with a 1500 ms total timeout. On any error (DB down, auth, SSL, missing table) stay silent; PULLED_DEBUG shows why.
+- Query `SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL`, with a 1500 ms total timeout. On any error (DB down, auth, SSL, missing table) stay silent; PULLED_DEBUG shows why (with the host only, never the URL).
 - Pending = migration folder names (directories that contain migration.sql) not in that result.
 - Issue: "2 migrations not applied: 20261120_add_users, 20261121_add_index". Fix: `npx prisma migrate dev`.
 
@@ -135,11 +141,11 @@ Phase 4 — README. Sections:
   - a table of what it checks
   - CLI flags
   - config
-  - FAQ: why not git hooks, does it slow startup (give the measured number), does it run in production
+  - FAQ: why not git hooks, does it slow startup (give the measured number), does it run in production, can the migrations check delay my app's exit (the 1.5 s worst case, with the measured numbers; Phase 2 decision 1)
   - an honest "How is this different from stale-dep / lockfile-guardian?" section: they only check dependencies and need hooks or stored hashes; pulled checks your whole setup with no setup step.
   Then run `npm pack --dry-run` and show me the file list and size. Do NOT publish. I'll publish myself.
 
-Commit after each phase, with conventional commit messages. Keep the code small and readable; this package should stay well under ~1000 lines of source.
+Commit after each phase, with conventional commit messages. Keep the code small and readable; aim for ~1,200 lines of source (Phase 2 decision 2).
 
 # 10. Phase 0 decisions (2026-11-21)
 
@@ -150,6 +156,21 @@ Based on docs/FINDINGS.md. The spec body above has been updated to match; this s
 3. yarn v1: compare yarn.lock against `lockfileEntries` in node_modules/.yarn-integrity.
 4. Prisma staleness: strip all whitespace; compare against the Prisma 6 `schema.prisma` copy / Prisma 7 `inlineSchema`; no mtime fallback. Multi-file is order-independent: every stripped source file must occur as a substring of the stripped generated schema, AND the sum of stripped source lengths must equal the stripped generated length. Tests: files reordered (silent), field added (issue), whitespace-only edit (silent).
 5. Prisma client location (all package managers): resolve @prisma/client from the project root with createRequire + realpath, then use the sibling .prisma/client. There is no "root node_modules/.prisma/client" assumption (it doesn't exist under pnpm).
-6. Migrations DB URL env var: `env("X")` in the schema datasource (Prisma 6) → in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X`, used only if exactly one distinct name is found → otherwise DATABASE_URL. Never execute the config.
+6. (Amended by Phase 2 decision 4.) Migrations DB URL env var: `env("X")` in the schema datasource (Prisma 6) → in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X`, used only if exactly one distinct name is found → otherwise DATABASE_URL. Never execute the config.
 7. Wording: Prisma issue title "Prisma schema changed since the client was generated" (sections 5 and 6). Env fix text "add them to .env (see .env.example)".
 8. Node support: engines ">=20.6" (first version with --import). CI runs the full suite on Node 20, 22, 24 on ubuntu + macos. Tooling is pinned to vitest 4.1.x and tsup 8.5.x, because the current majors (vitest 5.x needs Node ^22.12, tsup 9.x needs Node ^22.18) don't run on Node 20. Upgrade both tools when the minimum Node version moves to 22.
+
+# 11. Phase 2 decisions (2026-11-22)
+
+The spec body above has been updated to match; this section records why.
+
+1. Migrations connection: keep the 1500 ms timeout. Because a TCP connect in flight holds the event loop even when unref'd, pulled destroys the socket on timeout or error. Accepted worst case: the host exits up to 1.5 s late, only when the DB host doesn't answer at all. Measured: unanswered host 1.55 s, refused port 0.05 s, local DB 0.03 s. Don't shorten the timeout: cloud dev databases can take more than 500 ms to wake up and would be silently skipped. The README FAQ covers this (Phase 4).
+2. Line budget: aim for ~1,200 lines of source. Readability comes before line count; trim only real duplication.
+3. Kept as built:
+   - the workspace root is a parent with a lockfile AND a workspaces declaration (`workspaces` or pnpm-workspace.yaml);
+   - ".env file is missing" is reported only when required keys are actually missing;
+   - pnpm/yarn skip when their marker file (node_modules/.pnpm/lock.yaml, node_modules/.yarn-integrity) is absent;
+   - yarn: a changed range that resolves to an already-installed version is not reported;
+   - pg and @types/pg are devDependencies (real-DB tests only);
+   - TypeScript pinned to 5.9.3.
+4. Hard-coded datasource url: connect with the literal URL from the schema (it's the database the app actually uses). Never fall back to DATABASE_URL when the schema or config names a different source; if it's unclear which database is meant, skip. Tests cover both the hard-coded and the unclear case. Never print the URL, even under PULLED_DEBUG (host only).
