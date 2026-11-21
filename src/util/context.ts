@@ -109,3 +109,13 @@ export function execCmd(pm: PackageManager, bin: string): string {
   if (pm === 'yarn' || pm === 'yarn-berry') return `yarn ${bin}`;
   return `npx ${bin}`;
 }
+
+/** Import mode is off in production, on CI, or with PULLED=0/false/off. */
+export function importModeDisabled(env: Record<string, string | undefined>): boolean {
+  const ci = env.CI?.toLowerCase();
+  return (
+    env.NODE_ENV === 'production' ||
+    (ci !== undefined && ci !== '' && ci !== '0' && ci !== 'false') ||
+    ['0', 'false', 'off'].includes(env.PULLED?.toLowerCase() ?? '')
+  );
+}

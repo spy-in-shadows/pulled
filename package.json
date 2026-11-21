@@ -64,7 +64,9 @@
     "test": "vitest run",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "bench": "npm run build && node scripts/bench.mjs",
+    "e2e": "node scripts/e2e.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
