@@ -122,6 +122,7 @@ interface PgClient {
   connect(): Promise<void>;
   query(sql: string): Promise<{ rows: { migration_name: string }[] }>;
   end(): Promise<void>;
+  on(event: 'error', listener: (err: Error) => void): void;
 }
 
 /**
@@ -132,6 +133,8 @@ interface PgClient {
 const pgQuery: QueryFn = async (url, pgPath) => {
   const pg = createRequire(pgPath)(pgPath) as { Client: new (c: object) => PgClient };
   const client = new pg.Client({ connectionString: url });
+  // A dropped connection is emitted as 'error'; unhandled, it would crash the host.
+  client.on('error', () => {});
   client.connection?.stream?.unref?.();
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
