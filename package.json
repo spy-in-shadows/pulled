@@ -69,6 +69,8 @@
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
     "@types/node": "20.19.43",
+    "@types/pg": "8.23.1",
+    "pg": "8.23.1",
     "tsup": "8.5.1",
     "typescript": "5.9.3",
     "vitest": "4.1.12"

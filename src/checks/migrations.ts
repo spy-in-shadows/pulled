@@ -1,0 +1,132 @@
+import { createRequire } from 'node:module';
+import { dirname, join, resolve } from 'node:path';
+import type { CheckResult, Context } from '../types';
+import { execCmd } from '../util/context';
+import { parseDotenv } from '../util/dotenv';
+import { type Block, loadPrisma, type PrismaProject, single, usesPrisma } from '../util/prisma';
+
+const TIMEOUT_MS = 1500;
+const SQL =
+  'SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL';
+
+/** Returns the names of applied migrations. `pgPath` is the resolved path of the project's `pg`. */
+export type QueryFn = (url: string, pgPath: string) => Promise<string[]>;
+
+const skip = (reason: string): CheckResult => ({ issues: [], skip: reason });
+
+/** `migrations`: migration folders on disk that the database hasn't applied. */
+export async function migrationsCheck(
+  ctx: Context,
+  query: QueryFn = pgQuery,
+): Promise<CheckResult> {
+  if (!usesPrisma(ctx)) return skip('prisma is not a dependency');
+  const project = loadPrisma(ctx);
+  if (!project) return skip('no Prisma schema found');
+  const ds = project.datasource;
+  const dir = migrationsDir(project, ds);
+  if (!ctx.fs.isDir(dir)) return skip('no migrations folder');
+  const provider = ds?.fields.provider;
+  if (provider !== 'postgresql' && provider !== 'postgres') {
+    return skip(`datasource provider is ${provider ?? 'unknown'}; only postgresql is supported`);
+  }
+
+  const name = envName(project, ds);
+  const url =
+    ctx.env[name] ||
+    parseDotenv(ctx.fs.read(join(ctx.pkgDir, '.env')) ?? '').find((e) => e.key === name)?.value;
+  if (!url) return skip(`${name} is not set`);
+
+  let pgPath: string;
+  try {
+    pgPath = createRequire(join(ctx.pkgDir, 'package.json')).resolve('pg');
+  } catch {
+    return skip('install pg to enable');
+  }
+
+  let applied: Set<string>;
+  try {
+    applied = new Set(await query(url, pgPath));
+  } catch (err) {
+    ctx.debug(`migrations: database query failed: ${(err as Error)?.message ?? err}`);
+    return skip('could not query the database');
+  }
+
+  const pending = ctx.fs
+    .list(dir)
+    .filter((n) => !applied.has(n) && ctx.fs.exists(join(dir, n, 'migration.sql')))
+    .sort();
+  if (pending.length === 0) return { issues: [] };
+  const names =
+    pending.slice(0, 3).join(', ') + (pending.length > 3 ? `, +${pending.length - 3} more` : '');
+  const count = pending.length === 1 ? '1 migration' : `${pending.length} migrations`;
+  return {
+    issues: [
+      {
+        id: 'migrations',
+        title: `${count} not applied: ${names}`,
+        details: [],
+        fix: `${execCmd(ctx.pm, 'prisma')} migrate dev`,
+      },
+    ],
+  };
+}
+
+function migrationsDir(project: PrismaProject, ds: Block | undefined): string {
+  const { config } = project;
+  const fromConfig =
+    config && single(config.text, /\bmigrations\s*:\s*\{[^}]*?\bpath\s*:\s*(["'])([^"'\n]+)\1/g);
+  if (config && fromConfig) return resolve(config.dir, fromConfig);
+  return join(dirname(ds?.file ?? (project.files[0] as string)), 'migrations');
+}
+
+/** schema `url = env("X")` → the single env name used in prisma.config.* → DATABASE_URL. */
+function envName(project: PrismaProject, ds: Block | undefined): string {
+  const fromSchema = /^env\(\s*"(\w+)"\s*\)$/.exec(ds?.fields.url ?? '')?.[1];
+  if (fromSchema) return fromSchema;
+  const text = project.config?.text ?? '';
+  const names = new Set(
+    [...text.matchAll(/\benv\(\s*(["'])(\w+)\1\s*\)|\bprocess\.env\.(\w+)/g)].map(
+      (m) => m[2] ?? m[3],
+    ),
+  );
+  return names.size === 1 ? ([...names][0] as string) : 'DATABASE_URL';
+}
+
+interface PgClient {
+  connection?: { stream?: { unref?: () => void; destroy?: () => void } };
+  connect(): Promise<void>;
+  query(sql: string): Promise<{ rows: { migration_name: string }[] }>;
+  end(): Promise<void>;
+}
+
+/**
+ * Queries with the project's own `pg`. The timer and the connected socket are unref'd so the host
+ * can exit. A TCP connect that is still in flight holds the event loop no matter what (libuv), so
+ * on timeout or error the socket is destroyed: the worst case is the host exiting 1.5 s late.
+ */
+const pgQuery: QueryFn = async (url, pgPath) => {
+  const pg = createRequire(pgPath)(pgPath) as { Client: new (c: object) => PgClient };
+  const client = new pg.Client({ connectionString: url });
+  client.connection?.stream?.unref?.();
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${TIMEOUT_MS} ms`)), TIMEOUT_MS);
+    timer.unref();
+  });
+  const run = (async () => {
+    await client.connect();
+    const { rows } = await client.query(SQL);
+    return rows.map((r) => r.migration_name);
+  })();
+  run.catch(() => {});
+  try {
+    const names = await Promise.race([run, timeout]);
+    client.end().catch(() => {});
+    return names;
+  } catch (err) {
+    client.connection?.stream?.destroy?.();
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+};
