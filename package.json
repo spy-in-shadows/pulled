@@ -1,0 +1,76 @@
+{
+  "name": "pulled",
+  "version": "0.1.0",
+  "description": "After you pull, tells you exactly what in your local setup is out of sync (deps, Node version, .env, Prisma client, migrations) and the one command that fixes it.",
+  "keywords": [
+    "git pull",
+    "out of sync",
+    "dependencies",
+    "lockfile",
+    "node_modules",
+    "npm install",
+    "pnpm",
+    "yarn",
+    "nvmrc",
+    "dotenv",
+    "env",
+    "prisma",
+    "migrations",
+    "developer experience",
+    "dx"
+  ],
+  "license": "MIT",
+  "author": "Krishna Verma",
+  "type": "module",
+  "sideEffects": true,
+  "engines": {
+    "node": ">=20.6"
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "pulled": "dist/cli.js"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./api": {
+      "import": {
+        "types": "./dist/api.d.ts",
+        "default": "./dist/api.js"
+      },
+      "require": {
+        "types": "./dist/api.d.cts",
+        "default": "./dist/api.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "20.19.43",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

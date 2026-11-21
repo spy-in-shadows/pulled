@@ -122,7 +122,7 @@ Phase 0 — verify assumptions, no product code yet. Use a scratch folder outsid
   d) Prisma 6 (prisma-client-js) and Prisma 7 (prisma-client with output): run generate and inspect the output. Is there a schema copy or hash? Does it change only when the schema changes?
   Write the findings to docs/FINDINGS.md, then STOP and summarize them for me.
 
-Phase 1 — scaffold: package.json, tsconfig, tsup, vitest, lint, CI workflow (GitHub Actions: Node 20, 22, 24 on ubuntu + macos; current vitest), LICENSE, a .gitignore. Commit.
+Phase 1 — scaffold: package.json, tsconfig, tsup, vitest, lint, CI workflow (GitHub Actions: Node 20, 22, 24 on ubuntu + macos; vitest 4.1.x and tsup 8.5.x, see decision 8), LICENSE, a .gitignore. Commit.
 
 Phase 2 — the checks, one commit each, in order: node, env, deps, prisma-client, migrations. Each check gets fixture-based tests for: in sync (silent), each issue type, each skip reason, and the "user ran the fix → silent again" case. The prisma-client tests also cover: a multi-file schema with files reordered (silent), a field being added (issue), and whitespace-only edits (silent). The migrations tests use an injected fake query function. Real-DB tests run only when PULLED_TEST_DATABASE_URL is set.
 
@@ -152,4 +152,4 @@ Based on docs/FINDINGS.md. The spec body above has been updated to match; this s
 5. Prisma client location (all package managers): resolve @prisma/client from the project root with createRequire + realpath, then use the sibling .prisma/client. There is no "root node_modules/.prisma/client" assumption (it doesn't exist under pnpm).
 6. Migrations DB URL env var: `env("X")` in the schema datasource (Prisma 6) → in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X`, used only if exactly one distinct name is found → otherwise DATABASE_URL. Never execute the config.
 7. Wording: Prisma issue title "Prisma schema changed since the client was generated" (sections 5 and 6). Env fix text "add them to .env (see .env.example)".
-8. Node support: engines ">=20.6" (first version with --import). CI on Node 20, 22, 24 on ubuntu + macos. Current vitest.
+8. Node support: engines ">=20.6" (first version with --import). CI runs the full suite on Node 20, 22, 24 on ubuntu + macos. Tooling is pinned to vitest 4.1.x and tsup 8.5.x, because the current majors (vitest 5.x needs Node ^22.12, tsup 9.x needs Node ^22.18) don't run on Node 20. Upgrade both tools when the minimum Node version moves to 22.
