@@ -30,11 +30,14 @@ export async function migrationsCheck(
     return skip(`datasource provider is ${provider ?? 'unknown'}; only postgresql is supported`);
   }
 
-  const name = envName(project, ds);
+  const source = dbSource(project, ds);
+  if (!source) return skip('unclear which database the app uses');
+  const dotenv = () => parseDotenv(ctx.fs.read(join(ctx.pkgDir, '.env')) ?? '');
   const url =
-    ctx.env[name] ||
-    parseDotenv(ctx.fs.read(join(ctx.pkgDir, '.env')) ?? '').find((e) => e.key === name)?.value;
-  if (!url) return skip(`${name} is not set`);
+    'url' in source
+      ? source.url
+      : ctx.env[source.env] || dotenv().find((e) => e.key === source.env)?.value;
+  if (!url) return skip(`${(source as { env: string }).env} is not set`);
 
   let pgPath: string;
   try {
@@ -47,7 +50,8 @@ export async function migrationsCheck(
   try {
     applied = new Set(await query(url, pgPath));
   } catch (err) {
-    ctx.debug(`migrations: database query failed: ${(err as Error)?.message ?? err}`);
+    const msg = String((err as Error)?.message ?? err).replaceAll(url, '<url>');
+    ctx.debug(`migrations: query to ${host(url)} failed: ${msg}`);
     return skip('could not query the database');
   }
 
@@ -79,17 +83,38 @@ function migrationsDir(project: PrismaProject, ds: Block | undefined): string {
   return join(dirname(ds?.file ?? (project.files[0] as string)), 'migrations');
 }
 
-/** schema `url = env("X")` → the single env name used in prisma.config.* → DATABASE_URL. */
-function envName(project: PrismaProject, ds: Block | undefined): string {
-  const fromSchema = /^env\(\s*"(\w+)"\s*\)$/.exec(ds?.fields.url ?? '')?.[1];
-  if (fromSchema) return fromSchema;
+/**
+ * Which database the app uses: schema `url = env("X")` → a hard-coded schema url → the single env
+ * name in prisma.config.* → DATABASE_URL if nothing names a source. Undefined when it's unclear.
+ */
+function dbSource(
+  project: PrismaProject,
+  ds: Block | undefined,
+): { env: string } | { url: string } | undefined {
+  const schemaUrl = ds?.fields.url;
+  if (schemaUrl !== undefined) {
+    const name = /^env\(\s*"(\w+)"\s*\)$/.exec(schemaUrl)?.[1];
+    if (name) return { env: name };
+    return /^postgres(ql)?:\/\//.test(schemaUrl) ? { url: schemaUrl } : undefined;
+  }
   const text = project.config?.text ?? '';
   const names = new Set(
     [...text.matchAll(/\benv\(\s*(["'])(\w+)\1\s*\)|\bprocess\.env\.(\w+)/g)].map(
       (m) => m[2] ?? m[3],
     ),
   );
-  return names.size === 1 ? ([...names][0] as string) : 'DATABASE_URL';
+  if (names.size === 1) return { env: [...names][0] as string };
+  if (names.size > 1 || /\burl\s*:/.test(text)) return undefined;
+  return { env: 'DATABASE_URL' };
+}
+
+/** host:port of a connection string, for debug output (never the full URL: it has the password). */
+function host(url: string): string {
+  try {
+    return new URL(url).host || 'the database';
+  } catch {
+    return 'the database';
+  }
 }
 
 interface PgClient {

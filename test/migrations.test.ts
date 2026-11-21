@@ -124,16 +124,65 @@ describe('migrations check', () => {
       expect(await urlSeenBy(dir, { DATABASE_URL: 'wrong', PRIMARY_DB: 'right' })).toBe('right');
     });
 
+    it('connects with a hard-coded schema url, never DATABASE_URL', async () => {
+      const literal = 'postgresql://app@db.internal:5432/app';
+      const dir = project({ 'prisma/schema.prisma': schema('postgresql', `"${literal}"`) });
+      expect(await urlSeenBy(dir, { DATABASE_URL: 'wrong' })).toBe(literal);
+    });
+
     it.each([
-      ['env("X")', 'datasource: { url: env("APP_DB") }', 'right'],
-      ["env('X')", "datasource: { url: env('APP_DB') }", 'right'],
-      ['process.env.X', 'datasource: { url: process.env.APP_DB }', 'right'],
+      ['a schema url it cannot read', { 'prisma/schema.prisma': schema('postgresql', 'nope()') }],
       [
-        'several names → DATABASE_URL',
-        'url: env("APP_DB"), shadowDatabaseUrl: env("SHADOW_DB")',
-        'default',
+        'several names in prisma.config.ts',
+        {
+          'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
+          'prisma.config.ts': 'export default { url: env("APP_DB"), shadow: env("SHADOW_DB") }',
+        },
       ],
-    ])('reads prisma.config.ts: %s', async (_, body, expected) => {
+      [
+        'a prisma.config.ts url with no env name',
+        {
+          'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
+          'prisma.config.ts': 'export default { datasource: { url: getUrl() } }',
+        },
+      ],
+    ])('skips instead of guessing DATABASE_URL: %s', async (_, files) => {
+      const dir = project(files);
+      expect(await urlSeenBy(dir, { DATABASE_URL: 'wrong' })).toBeUndefined();
+      const result = await migrationsCheck(ctx(dir, { env: { DATABASE_URL: 'wrong' } }));
+      expect(result).toEqual({ issues: [], skip: 'unclear which database the app uses' });
+    });
+
+    it('uses DATABASE_URL when nothing names a source', async () => {
+      const dir = project({
+        'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
+        'prisma.config.ts': 'export default { schema: "prisma/schema.prisma" }',
+      });
+      expect(await urlSeenBy(dir, { DATABASE_URL: 'default' })).toBe('default');
+    });
+
+    it('never prints the URL under PULLED_DEBUG, only the host', async () => {
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const secret = 'postgresql://app:s3cret@db.example.com:6543/app';
+      await migrationsCheck(
+        ctx(project(), { env: { DATABASE_URL: secret, PULLED_DEBUG: '1' } }),
+        async (url) => {
+          throw new Error(`could not connect to ${url}`);
+        },
+      );
+      const out = stderr.mock.calls.map((c) => String(c[0])).join('');
+      stderr.mockRestore();
+      expect(out).toContain('db.example.com:6543');
+      expect(out).not.toContain('s3cret');
+      expect(out).not.toContain(secret);
+    });
+
+    it.each([
+      ['env("X")', 'datasource: { url: env("APP_DB") }'],
+      ["env('X')", "datasource: { url: env('APP_DB') }"],
+      ['process.env.X', 'datasource: { url: process.env.APP_DB }'],
+    ])('reads prisma.config.ts: %s', async (_, body) => {
+      const expected = 'right';
       const dir = project({
         'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
         'prisma.config.ts': `export default defineConfig({ ${body} });`,
