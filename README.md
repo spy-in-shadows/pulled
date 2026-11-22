@@ -17,7 +17,7 @@ When everything is in sync it prints nothing at all.
 
 ## Demo
 
-Try it in the browser: **https://pulled-demo.onrender.com** (pending the first deploy). Six small example
+Try it in the browser: **https://pulled-demo.onrender.com**. Six small example
 projects (in sync, stale dependencies, missing `.env` keys, a different Node version, a changed Prisma
 schema, and all of it at once), each checked live. Source:
 [spy-in-shadows/pulled-demo](https://github.com/spy-in-shadows/pulled-demo).
