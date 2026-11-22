@@ -1,5 +1,7 @@
 # pulled
 
+[![npm version](https://img.shields.io/npm/v/pulled.svg)](https://www.npmjs.com/package/pulled)
+
 After you pull, `pulled` tells you exactly what in your local setup is out of sync with the code (dependencies, Node version, `.env`, Prisma client, migrations) and the one command that fixes it.
 
 You pull `main`, start the dev server, and the first request dies with `column "avatar_url" does not exist`. Ten minutes later you work out that a teammate added a migration and you never ran it. With `pulled`, the dev server would have told you at startup:
@@ -12,6 +14,13 @@ You pull `main`, start the dev server, and the first request dies with `column "
 ```
 
 When everything is in sync it prints nothing at all.
+
+## Demo
+
+Try it in the browser: **https://pulled-demo.onrender.com** (pending the first deploy). Six small example
+projects (in sync, stale dependencies, missing `.env` keys, a different Node version, a changed Prisma
+schema, and all of it at once), each checked live. Source:
+[spy-in-shadows/pulled-demo](https://github.com/spy-in-shadows/pulled-demo).
 
 ## Install
 
