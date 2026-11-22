@@ -1,6 +1,6 @@
 {
   "name": "pulled",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "After you pull, tells you exactly what in your local setup is out of sync (deps, Node version, .env, Prisma client, migrations) and the one command that fixes it.",
   "keywords": [
     "git pull",
