@@ -10,7 +10,7 @@ const SQL =
   'SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL';
 
 /** Returns the names of applied migrations. `pgPath` is the resolved path of the project's `pg`. */
-export type QueryFn = (url: string, pgPath: string) => Promise<string[]>;
+export type QueryFn = (url: string, pgPath: string, background: boolean) => Promise<string[]>;
 
 const skip = (reason: string): CheckResult => ({ issues: [], skip: reason });
 
@@ -48,7 +48,7 @@ export async function migrationsCheck(
 
   let applied: Set<string>;
   try {
-    applied = new Set(await query(url, pgPath));
+    applied = new Set(await query(url, pgPath, ctx.background));
   } catch (err) {
     // A refused connection to `localhost` is an AggregateError (IPv4 + IPv6) with an empty message.
     const e = err as { message?: string; code?: string } | undefined;
@@ -144,20 +144,22 @@ interface PgClient {
 }
 
 /**
- * Queries with the project's own `pg`. The timer and the connected socket are unref'd so the host
- * can exit. A TCP connect that is still in flight holds the event loop no matter what (libuv), so
- * on timeout or error the socket is destroyed: the worst case is the host exiting 1.5 s late.
+ * Queries with the project's own `pg`. In import mode (`background`) the timer and the connected
+ * socket are unref'd so the host can exit. A TCP connect that is still in flight holds the event
+ * loop no matter what (libuv), so on timeout or error the socket is destroyed: the worst case is
+ * the host exiting 1.5 s late. The CLI and api keep them ref'd: they await the result, and with
+ * nothing else holding the event loop Node would exit before the query answers.
  */
-const pgQuery: QueryFn = async (url, pgPath) => {
+const pgQuery: QueryFn = async (url, pgPath, background) => {
   const pg = createRequire(pgPath)(pgPath) as { Client: new (c: object) => PgClient };
   const client = new pg.Client({ connectionString: url });
   // A dropped connection is emitted as 'error'; unhandled, it would crash the host.
   client.on('error', () => {});
-  client.connection?.stream?.unref?.();
+  if (background) client.connection?.stream?.unref?.();
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`timed out after ${TIMEOUT_MS} ms`)), TIMEOUT_MS);
-    timer.unref();
+    if (background) timer.unref();
   });
   const run = (async () => {
     await client.connect();

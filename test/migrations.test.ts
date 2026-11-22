@@ -87,6 +87,26 @@ describe('migrations check', () => {
     expect((await migrationsCheck(c, all)).issues).toHaveLength(0);
   });
 
+  it('lets go of the event loop in import mode only', async () => {
+    // Real-world test: the CLI unref'd its own query socket and exited before the DB answered.
+    const recordingPg = `exports.Client = class {
+  constructor() { this.connection = { stream: { unref() { globalThis.pulledUnrefs++; } } }; }
+  on() {}
+  async connect() {}
+  async query() { return { rows: [] }; }
+  async end() {}
+};`;
+    const g = globalThis as { pulledUnrefs?: number };
+    for (const background of [false, true]) {
+      g.pulledUnrefs = 0;
+      const dir = project({ 'node_modules/pg/index.js': recordingPg });
+      const result = await migrationsCheck(ctx(dir, { env, background }));
+      expect(result.issues).toHaveLength(1);
+      expect(g.pulledUnrefs).toBe(background ? 1 : 0);
+    }
+    delete g.pulledUnrefs;
+  });
+
   it('names the error code under PULLED_DEBUG when the error has no message', async () => {
     // Real-world test: a refused `localhost` connection rejects with an AggregateError whose
     // message is empty, which left the debug line as "failed: " with no reason.

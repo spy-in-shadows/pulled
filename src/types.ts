@@ -62,4 +62,6 @@ export interface Context {
   nodeVersion: string;
   fs: Fs;
   debug: (msg: string) => void;
+  /** Import mode: the migrations query must not keep the host process alive. */
+  background: boolean;
 }

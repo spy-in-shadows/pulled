@@ -15,7 +15,7 @@ function run(): void {
   const env = process.env;
   if (importModeDisabled(env)) return;
   const start = performance.now();
-  const ctx = createContext({ env });
+  const ctx = createContext({ env, background: true });
   if (!ctx) return;
   const print = (issues: Issue[]) => {
     const text = format(issues, { color: useColor(process.stderr, env), fixHint: true });

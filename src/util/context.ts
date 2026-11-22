@@ -10,6 +10,8 @@ export interface ContextOptions {
   env?: Record<string, string | undefined>;
   nodeVersion?: string;
   fs?: Fs;
+  /** Import mode: the migrations query must not keep the host process alive. */
+  background?: boolean;
 }
 
 /** Builds the check context, or returns undefined when there's no package.json above cwd. */
@@ -39,6 +41,7 @@ export function createContext(opts: ContextOptions = {}): Context | undefined {
     nodeVersion: opts.nodeVersion ?? process.versions.node,
     fs,
     debug,
+    background: opts.background ?? false,
   };
 }
 

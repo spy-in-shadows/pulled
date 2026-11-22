@@ -30,11 +30,11 @@ function sh(cmd, args, opts) {
   execFileSync(file, argv, { ...opts, ...extra });
 }
 
-function run(cmd, args, extraEnv = {}) {
+function run(cmd, args, extraEnv = {}, cwd = app) {
   const [file, argv, extra] = cmd === 'node' ? [process.execPath, args, {}] : shellArgs(cmd, args);
   const r = spawnSync(file, argv, {
     ...extra,
-    cwd: app,
+    cwd,
     env: { ...env, ...extraEnv },
     encoding: 'utf8',
   });
@@ -169,6 +169,52 @@ try {
   expect('CLI --fix runs npm install and exits 0', r.code === 0, r);
   r = run('npx', ['pulled']);
   expect('CLI is silent again', r.code === 0 && r.stdout === '' && r.stderr === '', r);
+
+  // A fake pg that, like the real one, does its work on a socket: once the socket is unref'd,
+  // that work no longer keeps Node alive. The CLI and api await the query, so they must not unref.
+  console.log('with a migration the database has not applied:');
+  const db = join(app, 'db');
+  const dbFiles = {
+    'package.json': JSON.stringify({ name: 'db', private: true, dependencies: { prisma: '*' } }),
+    'prisma/schema.prisma':
+      'datasource db {\n  provider = "postgresql"\n  url      = env("DATABASE_URL")\n}\n',
+    'prisma/migrations/1_init/migration.sql': '',
+    'prisma/migrations/2_add/migration.sql': '',
+    'node_modules/pg/package.json': JSON.stringify({ name: 'pg', main: 'index.js' }),
+    'node_modules/pg/index.js': `exports.Client = class {
+  constructor() { this.held = true; this.connection = { stream: { unref: () => { this.held = false; }, destroy() {} } }; }
+  on() {}
+  connect() { return new Promise((ok) => { const t = setTimeout(ok, 200); if (!this.held) t.unref(); }); }
+  async query() { return { rows: [{ migration_name: '1_init' }] }; }
+  async end() {}
+};
+`,
+    'api.mjs': files['api.mjs'],
+  };
+  for (const [name, content] of Object.entries(dbFiles)) {
+    mkdirSync(dirname(join(db, name)), { recursive: true });
+    writeFileSync(join(db, name), content);
+  }
+  const dbEnv = { DATABASE_URL: 'postgresql://user@127.0.0.1:1/app' };
+  const PENDING = '1 migration not applied: 2_add';
+  const cli = join(app, 'node_modules', 'pulled', 'dist', 'cli.js');
+  r = run('node', [cli], dbEnv, db);
+  expect('CLI waits for the query and reports it', r.code === 1 && r.stderr.includes(PENDING), r);
+  r = run('node', ['api.mjs'], dbEnv, db);
+  expect(
+    'pulled/api check() waits for the query and reports it',
+    JSON.parse(r.stdout || 'null')?.issues[0]?.title === PENDING,
+    r,
+  );
+  r = run('node', ['--import', 'pulled', '-e', 'setTimeout(() => {}, 400)'], dbEnv, db);
+  expect('import mode reports it while the app runs', r.stderr.includes(PENDING), r);
+  const start = Date.now();
+  r = run('node', ['--import', 'pulled', '-e', ''], dbEnv, db);
+  expect(
+    'import mode does not keep an app that exits right away alive',
+    r.code === 0 && Date.now() - start < 2000,
+    r,
+  );
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
