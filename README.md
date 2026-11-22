@@ -63,7 +63,7 @@ Output goes to stderr. It's colored only when stderr is a terminal and `NO_COLOR
 | `node` | The major version in `.nvmrc` or `.node-version` with the Node you're running. Aliases like `lts/*` are skipped. | `nvm use` |
 | `env` | The keys in `.env.example` (or `.env.sample` / `.env.template`) with `.env`, `.env.local` and your shell environment. A key marked `# optional` in the example isn't required. Only key names are ever printed, never values. | add them to `.env` |
 | `prisma-client` | The generated Prisma client with your schema (Prisma 6 `prisma-client-js` and Prisma 7 `prisma-client`, single- or multi-file). Formatting and whitespace changes don't count. | `npx prisma generate` |
-| `migrations` | The folders in `prisma/migrations` with the `_prisma_migrations` table in your database. PostgreSQL only, and only if `pg` is installed in your project. | `npx prisma migrate dev` |
+| `migrations` | The folders in `prisma/migrations` with the `_prisma_migrations` table in your database. PostgreSQL only, and only if `pg` is installed in your project. The database is the one your datasource `url` names, in `schema.prisma` or the `url:` key of `prisma.config.ts` (never executed); if that's unclear, the check is skipped. | `npx prisma migrate dev` |
 
 Fix commands use your package manager, for example `pnpm exec prisma generate`.
 
@@ -111,7 +111,7 @@ Optional, in `package.json`:
 
 Environment variables:
 
-- `PULLED=0` (or `false` / `off`) turns off import mode.
+- `PULLED=0` (or `false` / `off`) turns pulled off: import mode does nothing, and the CLI exits 0 with no output (no JSON either).
 - `PULLED_DEBUG=1` prints timings, skipped checks and the reasons, and internal errors.
 
 ## FAQ
@@ -123,7 +123,7 @@ Hooks have to be installed in every clone and are easy to bypass. They also only
 Barely. The synchronous checks take about 4 ms on a project with 1,000 lockfile entries. In the worst case, when npm's hidden lockfile is missing and pulled has to read every installed `package.json`, they take about 18 ms. Loading pulled plus running the checks adds 4–7 ms to `node` startup on small projects. The migrations check runs after your app has started and doesn't block it. `npm run bench` measures this on your machine.
 
 **Does it run in production?**
-No. Import mode does nothing when `NODE_ENV=production` or `CI` is set (or `PULLED=0`). It's meant to be a dev dependency anyway. The CLI ignores `NODE_ENV` and `CI`, so you can run `npx pulled` as a CI step.
+No. Import mode does nothing when `NODE_ENV=production` or `CI` is set (or `PULLED=0`). It's meant to be a dev dependency anyway. The CLI ignores `NODE_ENV` and `CI` (only `PULLED=0` turns it off), so you can run `npx pulled` as a CI step.
 
 **Can the migrations check delay my app's exit?**
 Only when the database host doesn't answer at all, and then by at most 1.5 s. The query runs in the background with a 1.5 s timeout and never keeps your process alive on its own, except while a TCP connection is still being set up, which Node can't release. When that happens, pulled closes the connection itself once the timeout hits. Measured: an unreachable host (for example a firewalled IP) delays exit by about 1.5 s, a database that's down (connection refused) by about 0.05 s, and a reachable local database not at all. The timeout isn't shorter because cloud dev databases can take more than half a second to wake up. If the check can't reach the database for any reason, it stays silent (`PULLED_DEBUG=1` shows why, with the host only, never the connection string).

@@ -83,9 +83,19 @@ function migrationsDir(project: PrismaProject, ds: Block | undefined): string {
   return join(dirname(ds?.file ?? (project.files[0] as string)), 'migrations');
 }
 
+const isPgUrl = (s: string) => /^postgres(ql)?:\/\//.test(s);
+
 /**
- * Which database the app uses: schema `url = env("X")` → a hard-coded schema url → the single env
- * name in prisma.config.* → DATABASE_URL if nothing names a source. Undefined when it's unclear.
+ * The value of a prisma.config.* `url:` key that pulled can read: `env("X")`, `env('X')`,
+ * `process.env.X` or a string literal, followed by `,`, `}` or the end of the line. Other keys
+ * (shadowDatabaseUrl, directUrl, …) never match: `\burl` is lowercase and needs a word boundary.
+ */
+const CONFIG_URL =
+  /\burl\s*:\s*(?:(?:env\(\s*(["'])(\w+)\1\s*\)|process\.env\.(\w+)|(["'])([^"'\n]*)\4)(?=\s*(?:[,}]|$)))?/gm;
+
+/**
+ * Which database the app uses: schema `url = env("X")` → a hard-coded schema url → the single
+ * `url:` key in prisma.config.* → DATABASE_URL if nothing names a source. Undefined when unclear.
  */
 function dbSource(
   project: PrismaProject,
@@ -95,17 +105,16 @@ function dbSource(
   if (schemaUrl !== undefined) {
     const name = /^env\(\s*"(\w+)"\s*\)$/.exec(schemaUrl)?.[1];
     if (name) return { env: name };
-    return /^postgres(ql)?:\/\//.test(schemaUrl) ? { url: schemaUrl } : undefined;
+    return isPgUrl(schemaUrl) ? { url: schemaUrl } : undefined;
   }
-  const text = project.config?.text ?? '';
-  const names = new Set(
-    [...text.matchAll(/\benv\(\s*(["'])(\w+)\1\s*\)|\bprocess\.env\.(\w+)/g)].map(
-      (m) => m[2] ?? m[3],
-    ),
-  );
-  if (names.size === 1) return { env: [...names][0] as string };
-  if (names.size > 1 || /\burl\s*:/.test(text)) return undefined;
-  return { env: 'DATABASE_URL' };
+  const urls = [...(project.config?.text ?? '').matchAll(CONFIG_URL)];
+  if (urls.length === 0) return { env: 'DATABASE_URL' };
+  const [m] = urls as [RegExpExecArray];
+  if (urls.length > 1) return undefined;
+  const name = m[2] ?? m[3];
+  if (name) return { env: name };
+  const literal = m[5];
+  return literal !== undefined && isPgUrl(literal) ? { url: literal } : undefined;
 }
 
 /** host:port of a connection string, for debug output (never the full URL: it has the password). */

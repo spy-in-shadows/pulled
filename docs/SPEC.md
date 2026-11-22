@@ -21,7 +21,7 @@ Before writing any code, save this spec verbatim as docs/SPEC.md and add a short
 - CLI: `npx pulled` — runs every check, prints the report, exits 0 (in sync), 1 (out of sync) or 2 (internal error). Flags, and nothing else: `--fix`, `--json`, `--cwd <dir>`, `--help`, `--version`.
 - Programmatic: `import { check } from 'pulled/api'` → `Promise<Report>`, where `Report = { ok: boolean, issues: Issue[], skipped: { id: CheckId, reason: string }[] }` and `Issue = { id: CheckId, title: string, details: string[], fix?: string }`. Export these types.
 
-Import mode is skipped entirely when NODE_ENV === 'production', when CI is truthy, or when PULLED is '0' / 'false' / 'off'. The CLI ignores NODE_ENV and CI, so it works as a CI step or a `predev` script.
+Import mode is skipped entirely when NODE_ENV === 'production', when CI is truthy, or when PULLED is '0' / 'false' / 'off'. The CLI ignores NODE_ENV and CI, so it works as a CI step or a `predev` script; with PULLED=0/false/off it exits 0 with no output (and no JSON) (Phase 3–4 decision 2).
 
 Import mode runs the synchronous checks immediately and prints at most once per process. The async migrations check runs afterwards and prints its own small block only if it finds pending migrations. Its timers and sockets must be unref'd so the host process can still exit normally. A TCP connect that is still in flight holds the event loop regardless, so on timeout or error pulled destroys the socket itself: the host exits at most 1.5 s late, and only when the DB host doesn't answer at all (Phase 2 decision 1).
 
@@ -79,8 +79,8 @@ Validate the config; ignore unknown keys and warn about them under PULLED_DEBUG 
   - schema datasource `url = env("X")` (Prisma 6) → env var X;
   - schema datasource `url = "postgresql://..."` (hard-coded) → connect with that literal URL;
   - schema datasource `url` in any other form → skip (unclear);
-  - no `url` in the schema: in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X`; exactly ONE distinct name → env var X; several names, or a `url:` with no extractable name → skip (unclear);
-  - nothing names a source at all → env var DATABASE_URL.
+  - no `url` in the schema: in prisma.config.*, read the `url:` key only (ignore shadowDatabaseUrl and every other key), conservatively: `url: env("X")` / `url: env('X')` / `url: process.env.X` → env var X; `url: "postgresql://..."` (string literal) → connect with that literal URL, like a hard-coded schema url; more than one `url:` match, or a `url:` in any other form → skip (unclear) (Phase 3–4 decision 1);
+  - nothing names a source at all (no schema `url`, no `url:` in prisma.config.*) → env var DATABASE_URL.
   Never fall back to DATABASE_URL when the schema or config names a different source. Never execute the config.
 - Connection string for env var X: process.env[X], otherwise X parsed from .env (don't mutate process.env). None found → skip. Never print the URL, not even under PULLED_DEBUG (print the host only).
 - Resolve `pg` from the project root with createRequire. Not installed → skip with reason "install pg to enable".
@@ -106,7 +106,7 @@ Only show the last line if at least one issue is auto-fixable. `--json` prints t
 
 # 7. --fix (CLI only)
 
-Run the fixable steps in this order, streaming their output: deps install → prisma generate → `prisma migrate deploy` (deploy, not dev: it never resets the DB). env and node issues are never auto-fixed. After fixing, run all checks again and print the final report. Exit 0 only if everything is in sync. Run commands with spawn and inherited stdio, never through a shell string.
+Run the fixable steps in this order, streaming their output: deps install → prisma generate → `prisma migrate deploy` (deploy, not dev: it never resets the DB). env and node issues are never auto-fixed. After fixing, run all checks again and print the final report. Exit 0 only if everything is in sync. Run commands with spawn and inherited stdio, never through a shell string — except on win32, where they're spawned with `shell: true` because npm/npx/pnpm/yarn are .cmd shims (Phase 3–4 decision 7).
 
 # 8. Tech & repo layout
 
@@ -128,7 +128,7 @@ Phase 0 — verify assumptions, no product code yet. Use a scratch folder outsid
   d) Prisma 6 (prisma-client-js) and Prisma 7 (prisma-client with output): run generate and inspect the output. Is there a schema copy or hash? Does it change only when the schema changes?
   Write the findings to docs/FINDINGS.md, then STOP and summarize them for me.
 
-Phase 1 — scaffold: package.json, tsconfig, tsup, vitest, lint, CI workflow (GitHub Actions: Node 20, 22, 24 on ubuntu + macos; vitest 4.1.x and tsup 8.5.x, see decision 8), LICENSE, a .gitignore. Commit.
+Phase 1 — scaffold: package.json, tsconfig, tsup, vitest, lint, CI workflow (GitHub Actions: Node 20, 22, 24 on ubuntu + macos, plus Node 22 on windows (Phase 3–4 decision 7); vitest 4.1.x and tsup 8.5.x, see decision 8), LICENSE, a .gitignore. Commit.
 
 Phase 2 — the checks, one commit each, in order: node, env, deps, prisma-client, migrations. Each check gets fixture-based tests for: in sync (silent), each issue type, each skip reason, and the "user ran the fix → silent again" case. The prisma-client tests also cover: a multi-file schema with files reordered (silent), a field being added (issue), and whitespace-only edits (silent). The migrations tests use an injected fake query function. Real-DB tests run only when PULLED_TEST_DATABASE_URL is set.
 
@@ -156,7 +156,7 @@ Based on docs/FINDINGS.md. The spec body above has been updated to match; this s
 3. yarn v1: compare yarn.lock against `lockfileEntries` in node_modules/.yarn-integrity.
 4. Prisma staleness: strip all whitespace; compare against the Prisma 6 `schema.prisma` copy / Prisma 7 `inlineSchema`; no mtime fallback. Multi-file is order-independent: every stripped source file must occur as a substring of the stripped generated schema, AND the sum of stripped source lengths must equal the stripped generated length. Tests: files reordered (silent), field added (issue), whitespace-only edit (silent).
 5. Prisma client location (all package managers): resolve @prisma/client from the project root with createRequire + realpath, then use the sibling .prisma/client. There is no "root node_modules/.prisma/client" assumption (it doesn't exist under pnpm).
-6. (Amended by Phase 2 decision 4.) Migrations DB URL env var: `env("X")` in the schema datasource (Prisma 6) → in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X`, used only if exactly one distinct name is found → otherwise DATABASE_URL. Never execute the config.
+6. (Amended by Phase 2 decision 4 and Phase 3–4 decision 1.) Migrations DB URL env var: `env("X")` in the schema datasource (Prisma 6) → in prisma.config.*, conservatively extract `env("X")` / `env('X')` / `process.env.X`, used only if exactly one distinct name is found → otherwise DATABASE_URL. Never execute the config.
 7. Wording: Prisma issue title "Prisma schema changed since the client was generated" (sections 5 and 6). Env fix text "add them to .env (see .env.example)".
 8. Node support: engines ">=20.6" (first version with --import). CI runs the full suite on Node 20, 22, 24 on ubuntu + macos. Tooling is pinned to vitest 4.1.x and tsup 8.5.x, because the current majors (vitest 5.x needs Node ^22.12, tsup 9.x needs Node ^22.18) don't run on Node 20. Upgrade both tools when the minimum Node version moves to 22.
 
@@ -174,3 +174,12 @@ The spec body above has been updated to match; this section records why.
    - pg and @types/pg are devDependencies (real-DB tests only);
    - TypeScript pinned to 5.9.3.
 4. Hard-coded datasource url: connect with the literal URL from the schema (it's the database the app actually uses). Never fall back to DATABASE_URL when the schema or config names a different source; if it's unclear which database is meant, skip. Tests cover both the hard-coded and the unclear case. Never print the URL, even under PULLED_DEBUG (host only).
+
+# 12. Phase 3–4 decisions (2026-11-22)
+
+Review of the judgment calls made while building Phases 3–4. The spec body above has been updated to match; this section records why.
+
+1. prisma.config.* datasource: read the `url:` key specifically — `url: env("X")`, `url: env('X')` or `url: process.env.X` → env var X. Ignore shadowDatabaseUrl and all other keys (the old rule, "exactly one distinct env name anywhere in the config", skipped the standard url + shadowDatabaseUrl config). Use it only if there is exactly one `url:` match; otherwise skip. A `url:` string literal is used like the hard-coded schema url (postgres URLs only). Tests: url + shadowDatabaseUrl (uses url's var), two `url:` matches (skip), `url:` string literal (connects with it).
+2. The CLI also respects PULLED=0/false/off: exit 0 with no output and no JSON. (`--help`, `--version` and argument errors are handled before this.) The CLI keeps ignoring NODE_ENV and CI.
+3, 4, 5, 6, 8. Kept as built.
+7. Windows: `--fix` works. On win32 only, the fix commands are spawned with `shell: true` (as one string; npm/npx/pnpm/yarn are .cmd shims that Node can only run through a shell). Safe because the commands are fixed strings pulled builds itself; a code comment says no user, file or env input may ever go into them, and a test asserts the exact argv for each package manager. CI adds windows-latest with Node 22 (unit tests + e2e). `.gitattributes` forces LF so the Biome format check passes on Windows checkouts. The e2e also runs a real `--fix` (a dependency a pull added → `npm install` → silent).

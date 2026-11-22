@@ -12,6 +12,7 @@ const pkg = {
 };
 const schema = (provider = 'postgresql', url = 'env("DATABASE_URL")') =>
   `generator client {\n  provider = "prisma-client-js"\n}\n\ndatasource db {\n  provider = "${provider}"\n  url      = ${url}\n}\n`;
+const noUrlSchema = schema('postgresql', '').replace(/\n {2}url.*\n/, '\n');
 const migrations = {
   'prisma/migrations/20261119_init/migration.sql': 'CREATE TABLE a();',
   'prisma/migrations/20261120_add_users/migration.sql': 'CREATE TABLE b();',
@@ -133,16 +134,24 @@ describe('migrations check', () => {
     it.each([
       ['a schema url it cannot read', { 'prisma/schema.prisma': schema('postgresql', 'nope()') }],
       [
-        'several names in prisma.config.ts',
+        'two url: keys in prisma.config.ts',
         {
-          'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
-          'prisma.config.ts': 'export default { url: env("APP_DB"), shadow: env("SHADOW_DB") }',
+          'prisma/schema.prisma': noUrlSchema,
+          'prisma.config.ts':
+            'export default {\n  datasource: { url: env("APP_DB") },\n  other: { url: env("OTHER_DB") },\n}',
+        },
+      ],
+      [
+        'a prisma.config.ts url: string that is not postgres',
+        {
+          'prisma/schema.prisma': noUrlSchema,
+          'prisma.config.ts': 'export default { datasource: { url: "file:./dev.db" } }',
         },
       ],
       [
         'a prisma.config.ts url with no env name',
         {
-          'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
+          'prisma/schema.prisma': noUrlSchema,
           'prisma.config.ts': 'export default { datasource: { url: getUrl() } }',
         },
       ],
@@ -155,7 +164,7 @@ describe('migrations check', () => {
 
     it('uses DATABASE_URL when nothing names a source', async () => {
       const dir = project({
-        'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
+        'prisma/schema.prisma': noUrlSchema,
         'prisma.config.ts': 'export default { schema: "prisma/schema.prisma" }',
       });
       expect(await urlSeenBy(dir, { DATABASE_URL: 'default' })).toBe('default');
@@ -184,7 +193,7 @@ describe('migrations check', () => {
     ])('reads prisma.config.ts: %s', async (_, body) => {
       const expected = 'right';
       const dir = project({
-        'prisma/schema.prisma': schema('postgresql', '').replace(/\n {2}url.*\n/, '\n'),
+        'prisma/schema.prisma': noUrlSchema,
         'prisma.config.ts': `export default defineConfig({ ${body} });`,
       });
       const seen = await urlSeenBy(dir, {
@@ -193,6 +202,39 @@ describe('migrations check', () => {
         SHADOW_DB: 'shadow',
       });
       expect(seen).toBe(expected);
+    });
+
+    it("uses the url: key's env var, not shadowDatabaseUrl's", async () => {
+      const dir = project({
+        'prisma/schema.prisma': noUrlSchema,
+        'prisma.config.ts': [
+          "import 'dotenv/config';",
+          "import { defineConfig, env } from 'prisma/config';",
+          'export default defineConfig({',
+          "  schema: 'prisma/schema.prisma',",
+          "  migrations: { path: 'prisma/migrations' },",
+          '  datasource: {',
+          "    url: env('APP_DB'),",
+          "    shadowDatabaseUrl: env('SHADOW_DB'),",
+          '  },',
+          '});',
+        ].join('\n'),
+      });
+      const seen = await urlSeenBy(dir, {
+        DATABASE_URL: 'default',
+        APP_DB: 'right',
+        SHADOW_DB: 'shadow',
+      });
+      expect(seen).toBe('right');
+    });
+
+    it('connects with a hard-coded url: string in prisma.config.ts', async () => {
+      const literal = 'postgresql://app@db.internal:5432/app';
+      const dir = project({
+        'prisma/schema.prisma': noUrlSchema,
+        'prisma.config.ts': `export default defineConfig({\n  datasource: { url: '${literal}' },\n});`,
+      });
+      expect(await urlSeenBy(dir, { DATABASE_URL: 'wrong' })).toBe(literal);
     });
   });
 
