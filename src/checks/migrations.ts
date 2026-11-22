@@ -50,7 +50,9 @@ export async function migrationsCheck(
   try {
     applied = new Set(await query(url, pgPath));
   } catch (err) {
-    const msg = String((err as Error)?.message ?? err).replaceAll(url, '<url>');
+    // A refused connection to `localhost` is an AggregateError (IPv4 + IPv6) with an empty message.
+    const e = err as { message?: string; code?: string } | undefined;
+    const msg = String(e?.message || e?.code || err).replaceAll(url, '<url>');
     ctx.debug(`migrations: query to ${host(url)} failed: ${msg}`);
     return skip('could not query the database');
   }

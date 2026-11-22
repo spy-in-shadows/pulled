@@ -87,6 +87,18 @@ describe('migrations check', () => {
     expect((await migrationsCheck(c, all)).issues).toHaveLength(0);
   });
 
+  it('names the error code under PULLED_DEBUG when the error has no message', async () => {
+    // Real-world test: a refused `localhost` connection rejects with an AggregateError whose
+    // message is empty, which left the debug line as "failed: " with no reason.
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const refused: QueryFn = async () => {
+      throw Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' });
+    };
+    await migrationsCheck(ctx(project(), { env: { ...env, PULLED_DEBUG: '1' } }), refused);
+    expect(String(stderr.mock.calls[0]?.[0])).toContain('failed: ECONNREFUSED');
+    stderr.mockRestore();
+  });
+
   it('stays silent when the query fails and explains under PULLED_DEBUG', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const failing: QueryFn = async () => {
