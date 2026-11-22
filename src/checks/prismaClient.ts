@@ -18,7 +18,7 @@ export function prismaClientCheck(ctx: Context): CheckResult {
   );
   if (clients.length === 0) return { issues: [], skip: 'no prisma-client generator' };
 
-  const sources = project.files.map((f) => strip(ctx.fs.read(f) ?? ''));
+  const sources = project.files.flatMap((f) => lines(ctx.fs.read(f) ?? ''));
   const fix = `${execCmd(ctx.pm, 'prisma')} generate`;
   for (const gen of clients) {
     const generated = readGenerated(ctx, gen.fields.provider === 'prisma-client', gen);
@@ -30,7 +30,7 @@ export function prismaClientCheck(ctx: Context): CheckResult {
         ],
       };
     }
-    if (!matches(sources, strip(generated.schema))) {
+    if (!sameLines(sources, lines(generated.schema))) {
       const title = 'Prisma schema changed since the client was generated';
       return { issues: [{ id: 'prisma-client', title, details: [], fix }] };
     }
@@ -38,12 +38,32 @@ export function prismaClientCheck(ctx: Context): CheckResult {
   return { issues: [] };
 }
 
-const strip = (s: string) => s.replace(/\s+/g, '');
+/**
+ * The schema as whitespace-stripped lines, each tagged with the block it's in (`modelUser{`).
+ * `prisma generate` formats its copy: it re-aligns whitespace, sorts block attributes (`@@unique`
+ * before `@@index` before `@@map`) and moves comments between them, and it joins multi-file schemas
+ * in no fixed order. So the comparison ignores whitespace and line order, but not which block a
+ * line belongs to.
+ */
+function lines(schema: string): string[] {
+  let block = '';
+  const out: string[] = [];
+  for (const raw of schema.split('\n')) {
+    const line = raw.replace(/\s+/g, '');
+    if (!line) continue;
+    if (!block && /^\w+\{$/.test(line)) block = line;
+    out.push(`${block}\0${line}`);
+    if (block && line === '}') block = '';
+  }
+  return out;
+}
 
-/** Order-independent: every source occurs in the generated schema and the lengths add up. */
-export function matches(sources: string[], generated: string): boolean {
-  const total = sources.reduce((n, s) => n + s.length, 0);
-  return total === generated.length && sources.every((s) => generated.includes(s));
+/** True if both lists hold the same lines, in any order. */
+function sameLines(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const x = [...a].sort();
+  const y = [...b].sort();
+  return x.every((line, i) => line === y[i]);
 }
 
 function readGenerated(

@@ -87,6 +87,54 @@ describe('prisma-client check: prisma-client-js (Prisma 6)', () => {
     expect(prismaClientCheck(ctx(dir)).issues).toHaveLength(0);
   });
 
+  // Real-world test (Pawnprint): `prisma generate` sorts block attributes and moves comments
+  // between them, so a schema with `@@index` before `@@unique` never matched its own copy.
+  const attrs = `model Account {
+  id Int @id
+  userId Int
+  name String
+  // Justified by explain plans
+  @@index([userId], map: "idx_user")
+  @@unique([name])
+  @@map("accounts")
+}
+`;
+  // Byte for byte what Prisma 6.19 and 7.10 write for `attrs` (5.22 sorts the same way).
+  const attrsFormatted = `model Account {
+  id     Int    @id
+  userId Int
+  name   String
+
+  @@unique([name])
+  // Justified by explain plans
+  @@index([userId], map: "idx_user")
+  @@map("accounts")
+}
+`;
+
+  it('is silent when prisma generate reordered block attributes and comments', () => {
+    const dir = project(`${formatted6}\n${attrsFormatted}`);
+    write(dir, { 'prisma/schema.prisma': `${schema6}\n${attrs}` });
+    expect(prismaClientCheck(ctx(dir)).issues).toEqual([]);
+  });
+
+  it('reports a field that moved to another model', () => {
+    const dir = project(`${formatted6}\n${attrsFormatted}`);
+    const moved = `${schema6}\n${attrs}`
+      .replace('  name String\n', '')
+      .replace('email String @unique', 'email String @unique\n  name String');
+    write(dir, { 'prisma/schema.prisma': moved });
+    expect(prismaClientCheck(ctx(dir)).issues).toEqual([issue(STALE)]);
+  });
+
+  it('reports a changed block attribute', () => {
+    const dir = project(`${formatted6}\n${attrsFormatted}`);
+    write(dir, {
+      'prisma/schema.prisma': `${schema6}\n${attrs.replace('@@unique([name])', '@@unique([name, userId])')}`,
+    });
+    expect(prismaClientCheck(ctx(dir)).issues).toEqual([issue(STALE)]);
+  });
+
   it('finds the client next to the real @prisma/client (pnpm layout)', () => {
     const store = 'node_modules/.pnpm/@prisma+client@6.19.3/node_modules';
     const dir = fixture({
