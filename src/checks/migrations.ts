@@ -86,16 +86,21 @@ function migrationsDir(project: PrismaProject, ds: Block | undefined): string {
 const isPgUrl = (s: string) => /^postgres(ql)?:\/\//.test(s);
 
 /**
- * The value of a prisma.config.* `url:` key that pulled can read: `env("X")`, `env('X')`,
- * `process.env.X` or a string literal, followed by `,`, `}` or the end of the line. Other keys
- * (shadowDatabaseUrl, directUrl, …) never match: `\burl` is lowercase and needs a word boundary.
+ * A `url` key in prisma.config.*, in any form: `url:`, `'url':`, shorthand `{ url }`, or a method
+ * `url() {…}`. Other keys (shadowDatabaseUrl, directUrl, …) and `x.url` never match.
  */
-const CONFIG_URL =
-  /\burl\s*:\s*(?:(?:env\(\s*(["'])(\w+)\1\s*\)|process\.env\.(\w+)|(["'])([^"'\n]*)\4)(?=\s*(?:[,}]|$)))?/gm;
+const CONFIG_URL_KEY = /(?<![\w$.])(["']?)url\1\s*(?=[:,}(])/g;
+
+/**
+ * A `url` value pulled can read: `: env("X")`, `: env('X')`, `: process.env.X` or `: "literal"`,
+ * followed by `,`, `}` or the end of the line. Anything else is unclear.
+ */
+const CONFIG_URL_VALUE =
+  /^:\s*(?:env\(\s*(["'])(\w+)\1\s*\)|process\.env\.(\w+)|(["'])([^"'\n]*)\4)(?=\s*[,}]|[ \t]*(?:\r?\n|$))/;
 
 /**
  * Which database the app uses: schema `url = env("X")` → a hard-coded schema url → the single
- * `url:` key in prisma.config.* → DATABASE_URL if nothing names a source. Undefined when unclear.
+ * `url` key in prisma.config.* → DATABASE_URL only if neither has a url. Undefined when unclear.
  */
 function dbSource(
   project: PrismaProject,
@@ -107,13 +112,15 @@ function dbSource(
     if (name) return { env: name };
     return isPgUrl(schemaUrl) ? { url: schemaUrl } : undefined;
   }
-  const urls = [...(project.config?.text ?? '').matchAll(CONFIG_URL)];
-  if (urls.length === 0) return { env: 'DATABASE_URL' };
-  const [m] = urls as [RegExpExecArray];
-  if (urls.length > 1) return undefined;
-  const name = m[2] ?? m[3];
+  const text = project.config?.text ?? '';
+  const keys = [...text.matchAll(CONFIG_URL_KEY)];
+  if (keys.length === 0) return { env: 'DATABASE_URL' };
+  if (keys.length > 1) return undefined;
+  const [key] = keys as [RegExpExecArray];
+  const m = CONFIG_URL_VALUE.exec(text.slice(key.index + key[0].length));
+  const name = m?.[2] ?? m?.[3];
   if (name) return { env: name };
-  const literal = m[5];
+  const literal = m?.[5];
   return literal !== undefined && isPgUrl(literal) ? { url: literal } : undefined;
 }
 

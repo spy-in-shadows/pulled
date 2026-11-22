@@ -131,7 +131,7 @@ describe('migrations check', () => {
       expect(await urlSeenBy(dir, { DATABASE_URL: 'wrong' })).toBe(literal);
     });
 
-    it.each([
+    it.each<[string, Record<string, string>]>([
       ['a schema url it cannot read', { 'prisma/schema.prisma': schema('postgresql', 'nope()') }],
       [
         'two url: keys in prisma.config.ts',
@@ -155,6 +155,32 @@ describe('migrations check', () => {
           'prisma.config.ts': 'export default { datasource: { url: getUrl() } }',
         },
       ],
+      ...(
+        [
+          ['shorthand { url }', 'const url = getUrl();\nexport default { datasource: { url } }'],
+          [
+            'shorthand { url } on its own line',
+            'const url = getUrl();\nexport default {\n  datasource: {\n    url\n  },\n}',
+          ],
+          [
+            'url: someVar',
+            'const someVar = getUrl();\nexport default { datasource: { url: someVar } }',
+          ],
+          [
+            'a template string',
+            'export default { datasource: { url: `postgresql://localhost/app` } }',
+          ],
+          ['env() with a fallback', "export default { datasource: { url: env('A') ?? 'b' } }"],
+          ['a method', 'export default { datasource: { url() { return getUrl(); } } }'],
+          ["a quoted 'url' key", "export default { datasource: { 'url': getUrl() } }"],
+        ] as [string, string][]
+      ).map(
+        ([name, config]) =>
+          [
+            `prisma.config.ts ${name}`,
+            { 'prisma/schema.prisma': noUrlSchema, 'prisma.config.ts': config },
+          ] as [string, Record<string, string>],
+      ),
     ])('skips instead of guessing DATABASE_URL: %s', async (_, files) => {
       const dir = project(files);
       expect(await urlSeenBy(dir, { DATABASE_URL: 'wrong' })).toBeUndefined();
